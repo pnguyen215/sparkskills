@@ -1,0 +1,182 @@
+# This snippet is a GitHub Actions workflow configuration file that defines a CI/CD pipeline for a project.
+# It includes steps for building, notifying, and deploying the project, with specific actions for sending notifications via Telegram and creating GitHub releases.
+
+name: GH Workflow News
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  # This job is responsible for building the project.
+  # It checks out the repository and prepares it for further actions.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+  # This job sends a notification via Telegram when a push or pull request is made.
+  # It checks if the necessary secrets are available and sends a formatted message.
+  # If the secrets are not set, it skips the notification step.
+  notify:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Check Secrets
+        id: check
+        run: |
+          if [[ -z "${{ secrets.TELEGRAM_CHAT_ID }}" || -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+      # - name: Send Telegram Notification
+      #   if: steps.check.outputs.skip == 'false'
+      #   uses: appleboy/telegram-action@master
+      #   with:
+      #     to: ${{ secrets.TELEGRAM_CHAT_ID }}
+      #     token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      #     format: markdown
+      #     message: |
+      #       🚀 *AI Workflow Administrator (AWA)*
+      #       - *username*: `${{ github.actor }}`
+      #       - *message*: `${{ github.event.commits[0].message }}`
+      #       - *hash*: `${{ github.sha }}`
+      #       - *repository*: `${{ github.repository }}`
+      #       - *head*: `${{ github.event.head_commit.message }}`
+      #       🍀 *See changes*: `https://github.com/${{ github.repository }}/commit/${{github.sha}}`
+
+  # This job is responsible for deploying the project when a tag is pushed.
+  # It checks if the tag exists, generates a changelog, creates a GitHub release, and sends a notification via Telegram.
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if [ -n "$GITHUB_REF" ]; then
+            TAG=${GITHUB_REF#refs/tags/}
+            # echo "::set-output name=tag::$TAG"
+            echo "TAG=${TAG}" >> $GITHUB_ENV
+          else
+            # echo "::set-output name=tag::"
+            echo "TAG=" >> $GITHUB_ENV
+          fi
+        shell: bash
+
+      - name: Check Secrets
+        id: check
+        run: |
+          if [[ -z "${{ secrets.TELEGRAM_CHAT_ID }}" || -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get Previous Tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "prev_tag=${PREV_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          PREV_TAG="${{ steps.prev_tag.outputs.prev_tag }}"
+          RELEASE_DATE=$(date +'%Y-%m-%d')
+          echo "release_date=${RELEASE_DATE}" >> $GITHUB_OUTPUT
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"%h - %s (@%an)" "${PREV_TAG}..HEAD")
+          else
+            CHANGELOG=$(git log --pretty=format:"%h - %s (@%an)" -n 10)
+          fi
+          {
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG }}
+          body: |
+            ## 📦 Release ${{ env.TAG }}
+
+            **Release Date:** ${{ steps.changelog.outputs.release_date }}
+            **Author:** @${{ github.actor }}
+
+            ---
+
+            ### 🚀 Features
+            <!-- List new features introduced in this release -->
+
+            ### 🐛 Bug Fixes
+            <!-- List bugs fixed in this release -->
+
+            ### ⚡ Improvements
+            <!-- Performance optimizations, refactoring, dependency updates -->
+
+            ---
+
+            ### 🔨 Commits in this release
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ---
+
+            ### 📌 Additional Notes
+            - Breaking changes (if any)
+            - Upgrade instructions
+            - Known issues
+
+            ---
+
+            ### 🔗 Links
+            - Compare: `${{ steps.prev_tag.outputs.prev_tag }}...${{ env.TAG }}`
+            - Repository: `https://github.com/${{ github.repository }}`
+
+            ---
+
+            ### ⚙️ Automation Tip
+            Generate commit list automatically:
+            ```bash
+            git log --pretty=format:"%h - %s (%an)" ${{ steps.prev_tag.outputs.prev_tag }}..${{ env.TAG }}
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # - name: Send Telegram Notification
+      #   if: steps.check.outputs.skip == 'false'
+      #   uses: appleboy/telegram-action@master
+      #   with:
+      #     to: ${{ secrets.TELEGRAM_CHAT_ID }}
+      #     token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      #     format: markdown
+      #     message: |
+      #       🚀 *AI Workflow Administrator (AWA)*
+      #       - *latest tag*: *${{ env.TAG }}*
+      #       - *username*: `${{ github.actor }}`
+      #       - *hash*: `${{ github.sha }}`
+      #       - *repository*: `${{ github.repository }}`
+      #       - *head*: `${{ github.event.head_commit.message }}`
+      #       🍀 *See changes*: `https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}`
+      #       📜 *Changelog*:
+      #       `${{ steps.changelog.outputs.changelog }}`
